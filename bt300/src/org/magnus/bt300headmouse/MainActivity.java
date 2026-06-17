@@ -74,8 +74,18 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         status = new TextView(this);
         status.setTextSize(18);
-        status.setText(sensor == null ? "No gyroscope sensor" : "Ready: " + sensor.getName());
+        status.setText(sensor == null ? "No gyroscope sensor" : "WebView build ready: " + sensor.getName());
         root.addView(status, fillWrap());
+
+        Button topOpenButton = new Button(this);
+        topOpenButton.setText("Open KasmVNC");
+        topOpenButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                loadKasmVnc(hostEdit.getText().toString().trim());
+            }
+        });
+        root.addView(topOpenButton, fillWrap());
 
         hostEdit = new EditText(this);
         hostEdit.setSingleLine(true);
