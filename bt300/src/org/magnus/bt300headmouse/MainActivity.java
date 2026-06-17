@@ -1,8 +1,11 @@
 package org.magnus.bt300headmouse;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -114,11 +117,11 @@ public class MainActivity extends Activity implements SensorEventListener {
         root.addView(webView, fillWeight());
 
         Button topOpenButton = new Button(this);
-        topOpenButton.setText("Open KasmVNC");
+        topOpenButton.setText("Open in Chrome");
         topOpenButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                loadKasmVnc(hostEdit.getText().toString().trim());
+                openKasmVncInChrome();
             }
         });
         root.addView(topOpenButton, fillWrap());
@@ -173,7 +176,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (host == null || host.length() == 0 || webView == null) {
             return;
         }
-        String url = "http://" + host + ":8445";
+        String url = kasmUrl(host);
         currentWebUrl = url;
         status.setText("Opening " + url);
         webView.setVisibility(View.VISIBLE);
@@ -190,7 +193,35 @@ public class MainActivity extends Activity implements SensorEventListener {
         }, 8000);
     }
 
+    private String kasmUrl(String host) {
+        return "http://" + host + ":8445";
+    }
+
+    private void openKasmVncInChrome() {
+        String host = hostEdit.getText().toString().trim();
+        if (host.length() == 0) {
+            return;
+        }
+        startSendingIfNeeded();
+        String url = kasmUrl(host);
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.setPackage("com.android.chrome");
+        try {
+            startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            Intent fallback = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            startActivity(fallback);
+        }
+    }
+
     private void startSending() {
+        startSendingIfNeeded();
+    }
+
+    private void startSendingIfNeeded() {
+        if (running) {
+            return;
+        }
         if (sensor == null) {
             status.setText("No usable gyroscope sensor");
             return;
@@ -239,6 +270,11 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     protected void onPause() {
         super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
         stopSending();
     }
 
