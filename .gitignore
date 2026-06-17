@@ -6,3 +6,4 @@ dist/
 # BT-300 Android build outputs
 bt300/build/
 bt300/__pycache__/
+bt300/debug.keystore

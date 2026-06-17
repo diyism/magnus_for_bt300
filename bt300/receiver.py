@@ -34,11 +34,11 @@ def main():
     parser.add_argument("--port", type=int, default=39500)
     parser.add_argument("--mode", choices=["absolute", "relative", "scroll"],
                         default="absolute")
-    parser.add_argument("--x-axis", choices=["yaw", "pitch", "roll"],
-                        default="yaw",
+    parser.add_argument("--x-axis", choices=["yaw", "pitch", "roll", "turn", "tilt"],
+                        default="turn",
                         help="incoming pose axis used for horizontal movement")
-    parser.add_argument("--y-axis", choices=["yaw", "pitch", "roll"],
-                        default="roll",
+    parser.add_argument("--y-axis", choices=["yaw", "pitch", "roll", "turn", "tilt"],
+                        default="tilt",
                         help="incoming pose axis used for vertical movement")
     parser.add_argument("--invert-x", action="store_true")
     parser.add_argument("--invert-y", action="store_true")

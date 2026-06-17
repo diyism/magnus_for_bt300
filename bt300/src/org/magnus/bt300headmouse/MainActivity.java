@@ -43,9 +43,13 @@ public class MainActivity extends Activity implements SensorEventListener {
     private float centerYaw = 0;
     private float centerPitch = 0;
     private float centerRoll = 0;
+    private final float[] centerForward = new float[] {0, 0, -1};
+    private final float[] lastForward = new float[] {0, 0, -1};
     private float lastYaw = 0;
     private float lastPitch = 0;
     private float lastRoll = 0;
+    private float lastTurn = 0;
+    private float lastTilt = 0;
 
     private EditText hostEdit;
     private EditText portEdit;
@@ -110,6 +114,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 centerYaw = lastYaw;
                 centerPitch = lastPitch;
                 centerRoll = lastRoll;
+                copyForward(lastForward, centerForward);
                 sequence = 0;
             }
         });
@@ -117,7 +122,7 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         poseView = new TextView(this);
         poseView.setTextSize(16);
-        poseView.setText("raw yaw 0.0  pitch 0.0  roll 0.0");
+        poseView.setText("turn 0.0  tilt 0.0  raw yaw 0.0");
         root.addView(poseView, fillWrap());
 
         setContentView(root);
@@ -152,6 +157,7 @@ public class MainActivity extends Activity implements SensorEventListener {
             centerYaw = lastYaw;
             centerPitch = lastPitch;
             centerRoll = lastRoll;
+            copyForward(lastForward, centerForward);
             sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME);
             startButton.setText("Stop");
             status.setText("Sending to " + host + ":" + port);
@@ -200,15 +206,56 @@ public class MainActivity extends Activity implements SensorEventListener {
         lastYaw = (float) Math.toDegrees(orientation[0]);
         lastPitch = (float) Math.toDegrees(orientation[1]);
         lastRoll = (float) Math.toDegrees(orientation[2]);
+        float[] forward = forwardFromMatrix(matrix);
+        copyForward(forward, lastForward);
+        lastTurn = signedHorizontalAngle(centerForward, forward);
+        lastTilt = verticalAngle(forward) - verticalAngle(centerForward);
 
         final float yaw = angleDelta(lastYaw, centerYaw);
         final float pitch = lastPitch - centerPitch;
         final float roll = lastRoll - centerRoll;
+        final float turn = lastTurn;
+        final float tilt = lastTilt;
         final long seq = sequence++;
 
         poseView.setText(String.format(Locale.US,
-                "raw yaw %.1f  pitch %.1f  roll %.1f", yaw, pitch, roll));
-        sendPose(seq, yaw, pitch, roll);
+                "turn %.1f  tilt %.1f  raw yaw %.1f pitch %.1f roll %.1f",
+                turn, tilt, yaw, pitch, roll));
+        sendPose(seq, yaw, pitch, roll, turn, tilt);
+    }
+
+    private float[] forwardFromMatrix(float[] matrix) {
+        return new float[] {-matrix[2], -matrix[5], -matrix[8]};
+    }
+
+    private void copyForward(float[] from, float[] to) {
+        to[0] = from[0];
+        to[1] = from[1];
+        to[2] = from[2];
+    }
+
+    private float signedHorizontalAngle(float[] center, float[] current) {
+        float centerX = center[0];
+        float centerZ = center[2];
+        float currentX = current[0];
+        float currentZ = current[2];
+        float centerLen = (float) Math.sqrt(centerX * centerX + centerZ * centerZ);
+        float currentLen = (float) Math.sqrt(currentX * currentX + currentZ * currentZ);
+        if (centerLen < 0.0001f || currentLen < 0.0001f) {
+            return 0;
+        }
+        centerX /= centerLen;
+        centerZ /= centerLen;
+        currentX /= currentLen;
+        currentZ /= currentLen;
+        float crossY = centerZ * currentX - centerX * currentZ;
+        float dot = centerX * currentX + centerZ * currentZ;
+        return (float) Math.toDegrees(Math.atan2(crossY, dot));
+    }
+
+    private float verticalAngle(float[] forward) {
+        float horizontal = (float) Math.sqrt(forward[0] * forward[0] + forward[2] * forward[2]);
+        return (float) Math.toDegrees(Math.atan2(forward[1], horizontal));
     }
 
     private float angleDelta(float value, float center) {
@@ -218,7 +265,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         return delta;
     }
 
-    private void sendPose(final long seq, final float yaw, final float pitch, final float roll) {
+    private void sendPose(final long seq, final float yaw, final float pitch,
+                          final float roll, final float turn, final float tilt) {
         if (sender == null || socket == null || targetAddress == null) {
             return;
         }
@@ -227,8 +275,9 @@ public class MainActivity extends Activity implements SensorEventListener {
             public void run() {
                 try {
                     String payload = String.format(Locale.US,
-                            "{\"seq\":%d,\"yaw\":%.4f,\"pitch\":%.4f,\"roll\":%.4f}",
-                            seq, yaw, pitch, roll);
+                            "{\"seq\":%d,\"yaw\":%.4f,\"pitch\":%.4f,\"roll\":%.4f,"
+                                    + "\"turn\":%.4f,\"tilt\":%.4f}",
+                            seq, yaw, pitch, roll, turn, tilt);
                     byte[] bytes = payload.getBytes(UTF8);
                     DatagramPacket packet = new DatagramPacket(
                             bytes, bytes.length, targetAddress, targetPort);

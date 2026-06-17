@@ -15,7 +15,7 @@ GEN="$OUT/gen"
 CLASSES="$OUT/classes"
 UNSIGNED="$OUT/bt300-headmouse-unsigned.apk"
 SIGNED="$OUT/bt300-headmouse-debug.apk"
-KEYSTORE="$OUT/debug.keystore"
+KEYSTORE="debug.keystore"
 
 rm -rf "$OUT"
 mkdir -p "$GEN" "$CLASSES"
