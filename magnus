@@ -4,23 +4,36 @@ import json
 import os
 import codecs
 import cairo
-import setproctitle
 import sys
 from functools import lru_cache
+
+
+def configure_displays_from_args(args):
+    capture_display = os.environ.get("DISPLAY")
+    to_display = None
+    for arg in args:
+        if arg.startswith("--to-display="):
+            parts = arg.split("=", 1)
+            if len(parts) == 2:
+                to_display = parts[1]
+
+    if to_display:
+        if capture_display and not os.environ.get("MAGNUS_CAPTURE_DISPLAY"):
+            os.environ["MAGNUS_CAPTURE_DISPLAY"] = capture_display
+        os.environ["DISPLAY"] = to_display
+
+
+configure_displays_from_args(sys.argv)
+
 try:
-    from Xlib import X
-    from Xlib import display as xdisplay
-    from Xlib.ext import shape
+    import setproctitle
 except ImportError:
-    X = None
-    xdisplay = None
-    shape = None
+    setproctitle = None
 import gi
 gi.require_version('Gtk', '3.0')
-gi.require_version('GdkX11', '3.0')
 gi.require_version('Keybinder', '3.0')
 from gi.repository import \
-    Gtk, Gdk, GLib, GdkPixbuf, Gio, GdkX11, Keybinder  # noqa: E402
+    Gtk, Gdk, GLib, GdkPixbuf, Gio, Keybinder  # noqa: E402
 
 __VERSION__ = "1.0.4"
 
@@ -30,7 +43,8 @@ class Main(object):
         self.zoomlevel = 2
         self.app = Gtk.Application.new(
             "org.kryogenix.magnus",
-            Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+            Gio.ApplicationFlags.HANDLES_COMMAND_LINE |
+            Gio.ApplicationFlags.NON_UNIQUE)
         self.app.connect("command-line", self.handle_commandline)
         self.app.connect("shutdown", self.handle_shutdown)
         self.resize_timeout = None
@@ -42,13 +56,16 @@ class Main(object):
         self.min_height = 300
         self.last_x = -1
         self.last_y = -1
-        self.refresh_interval = 250
+        self.last_modifier = None
+        self.refresh_interval = 50
+        self.refresh_when_stationary = True
         self.started_by_keypress = False
-        self.force_refresh = False
-        self.hide_before_capture = False
-        self.click_through = False
-        self.debug_capture = False
-        self.xdisplay = None
+        self.draw_pointer = True
+        self.print_displays = False
+        self.capture_display_name = os.environ.get("MAGNUS_CAPTURE_DISPLAY")
+        self.capture_display = None
+        self.separate_capture_display = bool(self.capture_display_name)
+        self.use_default_target_geometry = self.separate_capture_display
 
     def handle_shutdown(self, app):
         if self.started_by_keypress:
@@ -69,31 +86,26 @@ class Main(object):
             print("Options:")
             print("  --about")
             print("    Show about dialogue")
-            print("  --refresh-interval=120")
+            print("  --refresh-interval=50")
             print("    Set refresh interval in milliseconds (lower is faster)")
-            print("  --force-refresh")
-            print("    Refresh continually (according to refresh interval)")
-            print("      even if the mouse has not moved")
-            print("  --hide-before-capture")
-            print("    Temporarily lower the Magnus window before taking")
-            print("      screenshots that would otherwise include it")
-            print("  --click-through")
-            print("    Make the Magnus window ignore mouse input")
+            print("  --draw-pointer")
+            print("    Draw the real pointer position in the magnified image")
+            print("  --no-draw-pointer")
+            print("    Do not draw the real pointer position")
+            print("  --to-display=:2")
+            print("    Show the Magnus window on another X display")
+            print("  --print-displays")
+            print("    Print capture and target DISPLAY values at startup")
             return 0
 
-        if "--force-refresh" in args:
-            # If this argument is supplied, refresh the view even if the mouse
-            # has not moved. Useful if the screen content is video.
-            self.force_refresh = True
+        if "--draw-pointer" in args:
+            self.draw_pointer = True
 
-        if "--hide-before-capture" in args:
-            self.hide_before_capture = True
+        if "--no-draw-pointer" in args:
+            self.draw_pointer = False
 
-        if "--click-through" in args:
-            self.click_through = True
-
-        if "--debug-capture" in args:
-            self.debug_capture = True
+        if "--print-displays" in args:
+            self.print_displays = True
 
         # Override refresh rate on command line
         for arg in args:
@@ -106,6 +118,8 @@ class Main(object):
                         self.refresh_interval = rival
                     except ValueError:
                         pass
+            if arg.startswith("--to-display="):
+                pass
             if arg == "--started-by-keypress":
                 self.started_by_keypress = True
                 # This is here so that the autostart desktop file can
@@ -135,6 +149,7 @@ class Main(object):
 
     def start_everything_first_time(self, on_window_map=None):
         GLib.set_application_name("Magnus")
+        self.open_capture_display()
 
         # the window
         self.w = Gtk.ApplicationWindow.new(self.app)
@@ -152,7 +167,7 @@ class Main(object):
         self.zoom = zoom
         for i in range(2, 6):
             zoom.append(str(i), "{}×".format(i))
-        zoom.set_active(0)
+        zoom.set_active(max(0, min(3, self.zoomlevel - 2)))
         zoom.connect("changed", self.set_zoom)
 
         # the box that contains everything
@@ -192,8 +207,6 @@ class Main(object):
 
         # and, go
         self.w.show_all()
-        if self.click_through:
-            GLib.idle_add(self.make_click_through)
 
         self.width = 0
         self.height = 0
@@ -205,6 +218,24 @@ class Main(object):
         GLib.timeout_add(self.refresh_interval, self.poll)
 
         GLib.idle_add(self.load_config)
+
+    def open_capture_display(self):
+        if self.print_displays:
+            print("Magnus target DISPLAY: {}".format(
+                os.environ.get("DISPLAY")), flush=True)
+            print("Magnus capture DISPLAY: {}".format(
+                self.capture_display_name or os.environ.get("DISPLAY")),
+                flush=True)
+        if not self.capture_display_name:
+            self.capture_display = Gdk.Display.get_default()
+            return
+
+        self.capture_display = Gdk.Display.open(self.capture_display_name)
+        if not self.capture_display:
+            print("Could not open capture display {}".format(
+                self.capture_display_name), file=sys.stderr)
+            sys.exit(1)
+        self.zoomlevel = 3
 
     def zoom_out(self, keypress, zoom):
         current_index = zoom.get_active()
@@ -286,64 +317,49 @@ class Main(object):
             width, height, width * len(light))
 
     def poll(self, force_refresh=False):
-        display = Gdk.Display.get_default()
+        display = self.capture_display or Gdk.Display.get_default()
         (screen, x, y, modifier) = display.get_pointer()
-        if x == self.last_x and y == self.last_y:
-            # bail if nothing would be different
-            if not force_refresh and not self.force_refresh:
-                return True
+        pointer_unchanged = (
+            x == self.last_x and y == self.last_y and
+            modifier == self.last_modifier)
+        if (pointer_unchanged and not force_refresh and
+                not self.refresh_when_stationary):
+            return True
         self.last_x = x
         self.last_y = y
-        root = Gdk.get_default_root_window()
-        scaled_width = self.width // self.zoomlevel
-        scaled_height = self.height // self.zoomlevel
+        self.last_modifier = modifier
+        root = screen.get_root_window()
+        if self.separate_capture_display:
+            capture_screen_width = screen.get_width()
+            capture_screen_height = screen.get_height()
+            scaled_width = capture_screen_width // self.zoomlevel
+            scaled_height = capture_screen_height // self.zoomlevel
+        else:
+            scaled_width = self.width // self.zoomlevel
+            scaled_height = self.height // self.zoomlevel
         scaled_xoff = scaled_width // 2
         scaled_yoff = scaled_height // 2
         capture_x = x - scaled_xoff
         capture_y = y - scaled_yoff
-        capture_hits_window = self.rects_intersect(
-            capture_x, capture_y, scaled_width, scaled_height,
-            self.window_x, self.window_y,
-            self.width + self.decorations_width,
-            self.height + self.decorations_height)
-        pointer_hits_window = self.rects_intersect(
-            x, y, 1, 1,
-            self.window_x, self.window_y,
-            self.width + self.decorations_width,
-            self.height + self.decorations_height)
-        if pointer_hits_window and not self.hide_before_capture:
+        pointer_hits_window = False
+        if not self.separate_capture_display:
+            pointer_hits_window = self.rects_intersect(
+                x, y, 1, 1,
+                self.window_x, self.window_y,
+                self.width + self.decorations_width,
+                self.height + self.decorations_height)
+        if pointer_hits_window:
             # pointer is over our window, so make it an empty pixbuf
             white = self.get_white_pixbuf(self.width, self.height)
             self.img.set_from_pixbuf(white)
         else:
-            xwindow = None
-            if self.hide_before_capture and capture_hits_window:
-                magnus_window = self.w.get_window()
-                xwindow = self.get_managed_xwindow(magnus_window)
-                if self.debug_capture and xwindow:
-                    print("capture lowering X window 0x{:x}".format(
-                        xwindow.id), flush=True)
-                if xwindow:
-                    xwindow.configure(stack_mode=X.Below)
-                    self.xdisplay.sync()
-                elif magnus_window:
-                    magnus_window.lower()
-                Gdk.flush()
-                display.sync()
-            try:
-                screenshot = Gdk.pixbuf_get_from_window(
-                    root, capture_x, capture_y, scaled_width, scaled_height)
-            finally:
-                if self.hide_before_capture and capture_hits_window:
-                    if xwindow:
-                        xwindow.configure(stack_mode=X.Above)
-                        self.xdisplay.sync()
-                    elif magnus_window:
-                        magnus_window.raise_()
-                    Gdk.flush()
+            screenshot = Gdk.pixbuf_get_from_window(
+                root, capture_x, capture_y, scaled_width, scaled_height)
             scaled_pb = screenshot.scale_simple(
                 self.width, self.height,
                 GdkPixbuf.InterpType.NEAREST)
+            if self.draw_pointer:
+                scaled_pb = self.draw_pointer_marker(scaled_pb)
             self.img.set_from_pixbuf(scaled_pb)
         return True
 
@@ -351,30 +367,42 @@ class Main(object):
         return (ax < bx + bw and ax + aw > bx and
                 ay < by + bh and ay + ah > by)
 
-    def get_managed_xwindow(self, magnus_window):
-        if not magnus_window or not xdisplay:
-            return None
-        if not self.xdisplay:
-            self.xdisplay = xdisplay.Display()
+    def draw_pointer_marker(self, pixbuf):
+        width = pixbuf.get_width()
+        height = pixbuf.get_height()
+        center_x = width / 2
+        center_y = height / 2
+        radius = 9
+        arm = 22
 
-        client = self.xdisplay.create_resource_object(
-            "window", magnus_window.get_xid())
-        root = self.xdisplay.screen().root
-        parent = client.query_tree().parent
-        if parent and parent.id != root.id:
-            return parent
-        return client
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+        cr = cairo.Context(surface)
+        Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
+        cr.paint()
 
-    def make_click_through(self):
-        window = self.w.get_window()
-        if window:
-            window.input_shape_combine_region(cairo.Region(), 0, 0)
-            xwindow = self.get_managed_xwindow(window)
-            if xwindow and shape:
-                xwindow.rectangles(
-                    shape.SO.Set, shape.SK.Input, 0, 0, 0, [])
-                self.xdisplay.sync()
-        return False
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_source_rgba(0, 0, 0, 0.85)
+        cr.set_line_width(5)
+        self.draw_pointer_marker_path(cr, center_x, center_y, radius, arm)
+        cr.stroke()
+
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.set_line_width(2)
+        self.draw_pointer_marker_path(cr, center_x, center_y, radius, arm)
+        cr.stroke()
+
+        return Gdk.pixbuf_get_from_surface(surface, 0, 0, width, height)
+
+    def draw_pointer_marker_path(self, cr, center_x, center_y, radius, arm):
+        cr.arc(center_x, center_y, radius, 0, 6.283185307179586)
+        cr.move_to(center_x - arm, center_y)
+        cr.line_to(center_x - radius - 3, center_y)
+        cr.move_to(center_x + radius + 3, center_y)
+        cr.line_to(center_x + arm, center_y)
+        cr.move_to(center_x, center_y - arm)
+        cr.line_to(center_x, center_y - radius - 3)
+        cr.move_to(center_x, center_y + radius + 3)
+        cr.line_to(center_x, center_y + arm)
 
     def window_configure(self, window, ev):
         if not self.window_metrics_restored:
@@ -459,13 +487,27 @@ class Main(object):
                     self.zoomlevel = zl
                 idx += 1
         metrics = data.get("metrics")
-        if metrics:
+        if self.use_default_target_geometry:
+            self.set_default_target_geometry()
+        elif metrics:
             self.restore_window_metrics(metrics)
         self.window_metrics_restored = True
 
+    def set_default_target_geometry(self):
+        scr = self.w.get_screen()
+        sw = scr.get_width()
+        sh = scr.get_height()
+        width = max(self.min_width, int(sw))
+        height = max(self.min_height, int(sh))
+        x = 0
+        y = 0
+        self.w.resize(width, height)
+        self.w.move(x, y)
+
 
 def main():
-    setproctitle.setproctitle('magnus')
+    if setproctitle:
+        setproctitle.setproctitle('magnus')
     m = Main()
     m.app.run(sys.argv)
 
