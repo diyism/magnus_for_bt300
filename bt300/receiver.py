@@ -24,12 +24,24 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def axis_value(pose, name):
+    return float(pose[name])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=39500)
     parser.add_argument("--mode", choices=["absolute", "relative", "scroll"],
                         default="absolute")
+    parser.add_argument("--x-axis", choices=["yaw", "pitch", "roll"],
+                        default="yaw",
+                        help="incoming pose axis used for horizontal movement")
+    parser.add_argument("--y-axis", choices=["yaw", "pitch", "roll"],
+                        default="roll",
+                        help="incoming pose axis used for vertical movement")
+    parser.add_argument("--invert-x", action="store_true")
+    parser.add_argument("--invert-y", action="store_true")
     parser.add_argument("--yaw-gain", type=float, default=38.0,
                         help="pixels per degree in absolute/relative modes")
     parser.add_argument("--pitch-gain", type=float, default=30.0,
@@ -57,8 +69,12 @@ def main():
         data, addr = sock.recvfrom(2048)
         try:
             pose = json.loads(data.decode("utf-8"))
-            yaw = float(pose["yaw"])
-            pitch = float(pose["pitch"])
+            x_axis = axis_value(pose, args.x_axis)
+            y_axis = axis_value(pose, args.y_axis)
+            if args.invert_x:
+                x_axis = -x_axis
+            if args.invert_y:
+                y_axis = -y_axis
         except Exception as exc:
             print(f"bad packet from {addr}: {exc}", file=sys.stderr)
             continue
@@ -69,20 +85,20 @@ def main():
         last_update = now
 
         if args.mode == "absolute":
-            x = int(clamp(center_x + yaw * args.yaw_gain, 0, screen_w - 1))
-            y = int(clamp(center_y + pitch * args.pitch_gain, 0, screen_h - 1))
+            x = int(clamp(center_x + x_axis * args.yaw_gain, 0, screen_w - 1))
+            y = int(clamp(center_y + y_axis * args.pitch_gain, 0, screen_h - 1))
             subprocess.call(["xdotool", "mousemove", str(x), str(y)])
         elif args.mode == "relative":
             if last_yaw is not None and last_pitch is not None:
-                dx = int((yaw - last_yaw) * args.yaw_gain)
-                dy = int((pitch - last_pitch) * args.pitch_gain)
+                dx = int((x_axis - last_yaw) * args.yaw_gain)
+                dy = int((y_axis - last_pitch) * args.pitch_gain)
                 if dx or dy:
                     subprocess.call(["xdotool", "mousemove_relative",
                                      "--", str(dx), str(dy)])
-            last_yaw = yaw
-            last_pitch = pitch
+            last_yaw = x_axis
+            last_pitch = y_axis
         else:
-            scroll_accum += pitch
+            scroll_accum += y_axis
             if scroll_accum > args.scroll_threshold:
                 subprocess.call(["xdotool", "click", "5"])
                 scroll_accum = 0.0

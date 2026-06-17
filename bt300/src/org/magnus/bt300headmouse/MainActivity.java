@@ -57,9 +57,9 @@ public class MainActivity extends Activity implements SensorEventListener {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
         if (sensor == null) {
-            sensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+            sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         }
         buildUi();
     }
@@ -117,7 +117,7 @@ public class MainActivity extends Activity implements SensorEventListener {
 
         poseView = new TextView(this);
         poseView.setTextSize(16);
-        poseView.setText("yaw 0.0  pitch 0.0  roll 0.0");
+        poseView.setText("raw yaw 0.0  pitch 0.0  roll 0.0");
         root.addView(poseView, fillWrap());
 
         setContentView(root);
@@ -207,7 +207,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         final long seq = sequence++;
 
         poseView.setText(String.format(Locale.US,
-                "yaw %.1f  pitch %.1f  roll %.1f", yaw, pitch, roll));
+                "raw yaw %.1f  pitch %.1f  roll %.1f", yaw, pitch, roll));
         sendPose(seq, yaw, pitch, roll);
     }
 
